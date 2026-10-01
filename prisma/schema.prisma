@@ -1,0 +1,460 @@
+// LinguaMate AI - Prisma Database Schema
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AgeCategory {
+  UNDER_16
+  AGE_16_17
+  ADULT_18_PLUS
+}
+
+enum CefrLevel {
+  BEGINNER
+  A1
+  A2
+  B1
+  B2
+  C1
+  C2
+}
+
+enum VoiceGender {
+  FEMALE
+  MALE
+}
+
+enum VoiceStyle {
+  FRIENDLY
+  PROFESSIONAL
+  CALM
+  ENERGETIC
+}
+
+enum RequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+enum MatchStatus {
+  SCHEDULED
+  ACTIVE
+  COMPLETED
+  REPORTED
+}
+
+enum ReportReason {
+  INAPPROPRIATE_BEHAVIOR
+  HARASSMENT
+  SPAM
+  UNSAFE_COMMUNICATION
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  INVESTIGATING
+  RESOLVED
+  DISMISSED
+}
+
+enum ExamType {
+  IELTS_SPEAKING
+  IELTS_WRITING
+  GOETHE_SPEAKING
+  TESTDAF_SPEAKING
+  CEFR_ASSESSMENT
+  TOEFL_SPEAKING
+  CUSTOM
+}
+
+enum DifficultyLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+// 1. User Account
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  isAdmin       Boolean   @default(false)
+  isPremium     Boolean   @default(false)
+  isBanned      Boolean   @default(false)
+
+  profile             Profile?
+  aiVoicePreference   AiVoicePreference?
+  humanPartnerProfile HumanPartnerProfile?
+  
+  speakingSessions    SpeakingSession[]
+  mockAttempts        MockAttempt[]
+  shadowingAttempts   ShadowingAttempt[]
+  savedVocabulary     VocabularyWord[]
+  
+  sentRequests        PartnerRequest[]      @relation("SentRequests")
+  receivedRequests    PartnerRequest[]      @relation("ReceivedRequests")
+  matchesAsUser1      PartnerMatch[]        @relation("User1Matches")
+  matchesAsUser2      PartnerMatch[]        @relation("User2Matches")
+  
+  submittedReports    UserReport[]          @relation("Reporter")
+  receivedReports     UserReport[]          @relation("ReportedUser")
+  blockedUsers        UserBlock[]           @relation("Blocker")
+  blockedByUsers      UserBlock[]           @relation("Blocked")
+  
+  achievements        UserAchievement[]
+  roadmap             UserRoadmap?
+}
+
+// 2. User Profile (Safe for Minors - Exact age kept private)
+model Profile {
+  id                String      @id @default(uuid())
+  userId            String      @unique
+  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  name              String
+  exactAge          Int?        // Kept strictly private, never exposed in public API
+  ageCategory       AgeCategory @default(ADULT_18_PLUS)
+  nativeLanguage    String      @default("English")
+  primaryLearningLang String    @default("English")
+  currentLevel      CefrLevel   @default(B1)
+  targetLevel       CefrLevel   @default(B2)
+  goals             String[]    @default([])
+  dailyGoalMinutes  Int         @default(30)
+  currentStreak     Int         @default(1)
+  longestStreak     Int         @default(1)
+  xpPoints          Int         @default(0)
+  levelNumber       Int         @default(1)
+  avatarUrl         String?
+  bio               String?
+  onboardingDone    Boolean     @default(false)
+  
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  
+  languages         UserLanguage[]
+}
+
+// 3. Languages Catalog
+model Language {
+  id            String         @id @default(uuid())
+  code          String         @unique // "en", "de", "ko", "zh", "ar", "ru"
+  name          String
+  flagEmoji     String
+  isFullyActive Boolean        @default(false)
+  userLanguages UserLanguage[]
+}
+
+model UserLanguage {
+  id          String    @id @default(uuid())
+  profileId   String
+  profile     Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  languageId  String
+  language    Language  @relation(fields: [languageId], references: [id])
+  level       CefrLevel @default(A1)
+  isTarget    Boolean   @default(true)
+}
+
+// 4. AI Speaking Partner Preferences
+model AiVoicePreference {
+  id           String      @id @default(uuid())
+  userId       String      @unique
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  gender       VoiceGender @default(FEMALE)
+  style        VoiceStyle  @default(FRIENDLY)
+  pitch        Float       @default(1.0)
+  speedRate    Float       @default(1.0)
+  voiceName    String      @default("Samantha / Google US English")
+  
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+}
+
+// 5. AI Speaking Sessions & Evaluations
+model SpeakingSession {
+  id             String              @id @default(uuid())
+  userId         String
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  languageCode   String              @default("en")
+  topic          String              @default("Casual Conversation")
+  mode           String              @default("Friendly")
+  targetLevel    CefrLevel           @default(B1)
+  durationSeconds Int                @default(0)
+  
+  createdAt      DateTime            @default(now())
+  
+  messages       SpeakingMessage[]
+  evaluation     SpeakingEvaluation?
+}
+
+model SpeakingMessage {
+  id         String          @id @default(uuid())
+  sessionId  String
+  session    SpeakingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  sender     String          // "USER" | "AI"
+  content    String
+  audioUrl   String?
+  timestamp  DateTime        @default(now())
+}
+
+model SpeakingEvaluation {
+  id                   String          @id @default(uuid())
+  sessionId            String          @unique
+  session              SpeakingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  fluencyScore         Int             // 0-100
+  grammarScore         Int             // 0-100
+  vocabularyScore      Int             // 0-100
+  pronunciationScore   Int             // 0-100
+  coherenceScore       Int             // 0-100
+  overallEstimatedLevel CefrLevel      @default(B1)
+  
+  mistakesDetected     Json            @default("[]") // Array of { mistake, correction, explanation }
+  betterAlternatives   Json            @default("[]") // Array of string suggestions
+  usefulVocabulary     Json            @default("[]") // Array of { word, context, cefr }
+  pronunciationNotes   Json            @default("[]") // Array of string tips
+  
+  createdAt            DateTime        @default(now())
+}
+
+// 6. Human Speaking Partner Matching
+model HumanPartnerProfile {
+  id              String       @id @default(uuid())
+  userId          String       @unique
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  nativeLanguage  String
+  learningLanguage String
+  proficiency     CefrLevel    @default(B1)
+  ageCategory     AgeCategory  @default(ADULT_18_PLUS)
+  interests       String[]     @default([])
+  availability    String       @default("Evenings")
+  preferredTopics String[]     @default([])
+  isAvailable     Boolean      @default(true)
+  voiceOnlyOnly   Boolean      @default(true)
+  
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+}
+
+model PartnerRequest {
+  id          String        @id @default(uuid())
+  senderId    String
+  sender      User          @relation("SentRequests", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId  String
+  receiver    User          @relation("ReceivedRequests", fields: [receiverId], references: [id], onDelete: Cascade)
+  
+  status      RequestStatus @default(PENDING)
+  message     String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+model PartnerMatch {
+  id           String      @id @default(uuid())
+  user1Id      String
+  user1        User        @relation("User1Matches", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2Id      String
+  user2        User        @relation("User2Matches", fields: [user2Id], references: [id], onDelete: Cascade)
+  
+  status       MatchStatus @default(ACTIVE)
+  roomId       String      @unique @default(uuid())
+  durationSecs Int         @default(0)
+  startedAt    DateTime    @default(now())
+  endedAt      DateTime?
+}
+
+// 7. Safety, Reporting & Blocking (Child/Minor Safety)
+model UserReport {
+  id             String       @id @default(uuid())
+  reporterId     String
+  reporter       User         @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reportedUserId String
+  reportedUser   User         @relation("ReportedUser", fields: [reportedUserId], references: [id], onDelete: Cascade)
+  
+  reason         ReportReason @default(OTHER)
+  details        String?
+  status         ReportStatus @default(PENDING)
+  adminNotes     String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model UserBlock {
+  id             String   @id @default(uuid())
+  blockerId      String
+  blocker        User     @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedUserId  String
+  blockedUser    User     @relation("Blocked", fields: [blockedUserId], references: [id], onDelete: Cascade)
+  createdAt      DateTime @default(now())
+
+  @@unique([blockerId, blockedUserId])
+}
+
+// 8. Certificate Mock Exams
+model MockExam {
+  id          String         @id @default(uuid())
+  examType    ExamType       @default(IELTS_SPEAKING)
+  title       String
+  language    String         @default("en")
+  description String
+  timeLimitSec Int           @default(900)
+  sections    Json           @default("[]") // Section names e.g., ["Part 1", "Part 2", "Part 3"]
+  
+  questions   MockQuestion[]
+  attempts    MockAttempt[]
+  createdAt   DateTime       @default(now())
+}
+
+model MockQuestion {
+  id          String    @id @default(uuid())
+  examId      String
+  exam        MockExam  @relation(fields: [examId], references: [id], onDelete: Cascade)
+  
+  sectionName String    @default("Part 1")
+  prompt      String
+  cueCard     String?
+  prepTimeSec Int       @default(0)
+  speakTimeSec Int      @default(60)
+  orderIndex  Int       @default(0)
+  
+  answers     MockAnswer[]
+}
+
+model MockAttempt {
+  id              String       @id @default(uuid())
+  userId          String
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  examId          String
+  exam            MockExam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  
+  estimatedScore  String       // e.g. "Band 7.0" or "B2"
+  estimatedCefr   CefrLevel    @default(B2)
+  fluencyScore    Int          @default(0)
+  grammarScore    Int          @default(0)
+  vocabScore      Int          @default(0)
+  coherenceScore  Int          @default(0)
+  pronuncScore    Int          @default(0)
+  feedbackSummary String?
+  strengths       String[]     @default([])
+  improvements    String[]     @default([])
+  
+  completedAt     DateTime     @default(now())
+  answers         MockAnswer[]
+}
+
+model MockAnswer {
+  id              String       @id @default(uuid())
+  attemptId       String
+  attempt         MockAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId      String
+  question        MockQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  
+  transcriptText  String
+  audioRecordUrl  String?
+  aiCorrection    String?
+}
+
+// 9. Shadowing Lessons & Attempts
+model ShadowingLesson {
+  id          String             @id @default(uuid())
+  language    String             @default("en")
+  level       CefrLevel          @default(B1)
+  topic       String
+  title       String
+  audioUrl    String?
+  nativeSpeaker String           @default("Emma (Native UK)")
+  speedRate   Float              @default(1.0)
+  durationSec Int                @default(45)
+  transcript  String             // Full script
+  sentences   Json               // Array of { id, text, startTime, endTime }
+  
+  attempts    ShadowingAttempt[]
+  createdAt   DateTime           @default(now())
+}
+
+model ShadowingAttempt {
+  id                 String          @id @default(uuid())
+  userId             String
+  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lessonId           String
+  lesson             ShadowingLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  
+  overallScore       Int             @default(0) // 0-100
+  pronunciationScore Int             @default(0) // 0-100
+  rhythmScore        Int             @default(0) // 0-100
+  intonationScore    Int             @default(0) // 0-100
+  speedScore         Int             @default(0) // 0-100
+  wordScores         Json            @default("[]") // Array of { word, status: 'good'|'average'|'poor', score }
+  
+  createdAt          DateTime        @default(now())
+}
+
+// 10. Vocabulary & Flashcards (Spaced Repetition)
+model VocabularyWord {
+  id            String          @id @default(uuid())
+  userId        String
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  word          String
+  translation   String
+  phonetic      String?
+  language      String          @default("en")
+  level         CefrLevel       @default(B1)
+  example       String
+  sourceSession String?         // "AI Conversation", "Shadowing", "Mock Exam"
+  easeFactor    Float           @default(2.5)
+  intervalDays  Int             @default(1)
+  repetition    Int             @default(0)
+  nextReview    DateTime        @default(now())
+  createdAt     DateTime        @default(now())
+}
+
+// 11. Gamification & Roadmap
+model Achievement {
+  id          String            @id @default(uuid())
+  code        String            @unique
+  title       String
+  description String
+  iconName    String
+  xpReward    Int               @default(50)
+  users       UserAchievement[]
+}
+
+model UserAchievement {
+  id            String      @id @default(uuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementId String
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  unlockedAt    DateTime    @default(now())
+
+  @@unique([userId, achievementId])
+}
+
+model UserRoadmap {
+  id          String    @id @default(uuid())
+  userId      String    @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  currentCefr CefrLevel @default(B1)
+  targetCefr  CefrLevel @default(B2)
+  totalWeeks  Int       @default(4)
+  weeksPlan   Json      // Array of weekly milestones with task completion flags
+  
+  updatedAt   DateTime  @updatedAt
+}
