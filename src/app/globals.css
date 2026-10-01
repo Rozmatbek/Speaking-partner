@@ -29,8 +29,8 @@
 
 /* Custom smooth scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -38,19 +38,22 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(160, 160, 160, 0.25);
+  background: rgba(160, 160, 160, 0.2);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(160, 160, 160, 0.45);
+  background: rgba(160, 160, 160, 0.35);
 }
 
-/* Hide Next.js dev overlay icons */
+/* Hide Next.js dev overlay icons and indicators */
+nextjs-portal,
+#nextjs-dev-indicator,
+[data-nextjs-dev-indicator],
 [data-nextjs-dev-overlay],
 [data-nextjs-toast],
-nextjs-portal,
-#nextjs-dev-indicator {
+[data-nextjs-route-announcer],
+div:has(> svg[viewBox="0 0 24 24"] > path[d*="M12 2L2 22h20L12 2z"]) {
   display: none !important;
   opacity: 0 !important;
   visibility: hidden !important;

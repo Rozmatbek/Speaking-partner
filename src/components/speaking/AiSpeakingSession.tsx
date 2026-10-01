@@ -1,66 +1,51 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { speechService } from '@/lib/speech';
 import { aiProvider } from '@/lib/ai-provider';
+import { getTranslation } from '@/lib/translations';
+import { SpeakingMessage } from '@/types';
 import {
   Mic,
   MicOff,
   PhoneOff,
-  Smile,
-  Sparkles,
-  Volume2,
 } from 'lucide-react';
 
 interface PartnerAvatar {
   id: string;
   name: string;
   avatarUrl: string;
-  genderText: string;
-  country: string;
-  flag: string;
-  language: string;
-  nativeAccent: string;
   voiceGender: 'Female' | 'Male';
   voiceStyle: 'Friendly' | 'Professional' | 'Calm' | 'Energetic';
   personality: string;
 }
 
-// Exactly 1 Female and 1 Male Partner as requested
+// 1 Female (Emma) and 1 Male (Lucas) Partner
 const PARTNER_AVATARS: PartnerAvatar[] = [
   {
     id: 'p-emma',
     name: 'Emma',
-    genderText: 'Ayol Partner',
     avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=800&auto=format&fit=crop&q=80',
-    country: 'United Kingdom',
-    flag: '🇬🇧',
-    language: 'English',
-    nativeAccent: 'British (London)',
     voiceGender: 'Female',
     voiceStyle: 'Friendly',
-    personality: 'Samimiy, tushunarli va ravon so‘zlashuvchi ingliz tili sohibasi',
+    personality: 'Friendly, clear, and articulate native British English speaker',
   },
   {
     id: 'p-lucas',
     name: 'Lucas',
-    genderText: 'Erkak Partner',
     avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800&auto=format&fit=crop&q=80',
-    country: 'Germany / UK',
-    flag: '🇩🇪',
-    language: 'German & English',
-    nativeAccent: 'Standard Deutsch / European English',
     voiceGender: 'Male',
     voiceStyle: 'Calm',
-    personality: 'Bosiq, qiziqarli va tabiiy muloqot qiluvchi suhbatdosh',
+    personality: 'Calm, engaging, and natural conversational partner',
   },
 ];
 
 type EmotionState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
 export const AiSpeakingSession: React.FC = () => {
-  const { userProfile, showToast } = useApp();
+  const { userProfile } = useApp();
+  const t = getTranslation(userProfile.learningLanguage);
 
   const [selectedPartner, setSelectedPartner] = useState<PartnerAvatar>(PARTNER_AVATARS[0]);
   const [isFullScreenCall, setIsFullScreenCall] = useState<boolean>(false);
@@ -71,6 +56,9 @@ export const AiSpeakingSession: React.FC = () => {
   const [partnerSubtitle, setPartnerSubtitle] = useState<string>('');
   const [userLiveSubtitle, setUserLiveSubtitle] = useState<string>('');
 
+  // Conversation history for multi-turn Gemini AI
+  const conversationHistoryRef = useRef<SpeakingMessage[]>([]);
+
   const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const typewriterIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -80,8 +68,7 @@ export const AiSpeakingSession: React.FC = () => {
     let currentIdx = 0;
     setPartnerSubtitle('');
 
-    // Natural streaming interval per word roughly synchronizing with natural speech
-    const intervalMs = Math.max(140, Math.min(260, Math.floor(4000 / Math.max(words.length, 1))));
+    const intervalMs = Math.max(140, Math.min(240, Math.floor(3600 / Math.max(words.length, 1))));
 
     typewriterIntervalRef.current = setInterval(() => {
       currentIdx++;
@@ -97,11 +84,19 @@ export const AiSpeakingSession: React.FC = () => {
     setIsFullScreenCall(true);
     setIsMuted(false);
     setUserLiveSubtitle('');
+    conversationHistoryRef.current = [];
 
     const isGerman = userProfile.learningLanguage.toLowerCase().includes('german');
     const initialGreeting = isGerman
       ? `Hallo ${userProfile.name}! Schön dich kennenzulernen. Ich bin ${partner.name}. Worüber möchtest du heute sprechen?`
       : `Hi ${userProfile.name}! It is so great to meet you. I am ${partner.name}. What would you like to talk about today?`;
+
+    conversationHistoryRef.current.push({
+      id: 'msg-0',
+      sender: 'ai',
+      text: initialGreeting,
+      timestamp: new Date().toISOString(),
+    });
 
     partnerSpeak(initialGreeting, partner);
   };
@@ -141,14 +136,14 @@ export const AiSpeakingSession: React.FC = () => {
 
     speechService.startListening({
       lang: isGerman ? 'de-DE' : 'en-US',
-      onResult: (transcript, isFinal) => {
+      onResult: (transcript) => {
         setUserLiveSubtitle(transcript);
 
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
 
-        // When user finishes spoken phrase (1.5s pause), trigger partner response
+        // When user pauses speaking (1.5s), send to Gemini AI
         silenceTimeoutRef.current = setTimeout(() => {
-          if (transcript.trim().length > 2) {
+          if (transcript.trim().length > 1) {
             handleUserSpeechFinished(transcript);
           }
         }, 1500);
@@ -157,7 +152,7 @@ export const AiSpeakingSession: React.FC = () => {
         if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
       },
       onEnd: () => {
-        // Keep listening loop if still active
+        // Keep listening loop if call is ongoing
       },
     });
   };
@@ -166,19 +161,44 @@ export const AiSpeakingSession: React.FC = () => {
     speechService.stopListening();
     setEmotion('thinking');
 
+    conversationHistoryRef.current.push({
+      id: `msg-${Date.now()}`,
+      sender: 'user',
+      text: spokenText,
+      timestamp: new Date().toISOString(),
+    });
+
     try {
       const response = await aiProvider.generateConversation({
         language: userProfile.learningLanguage,
         cefrLevel: userProfile.currentLevel || 'B1',
-        topic: 'Spontaneous Voice Dialogue',
+        topic: 'General Topic',
         mode: selectedPartner.voiceStyle,
-        history: [],
+        history: conversationHistoryRef.current,
         userMessage: spokenText,
+        partner: {
+          name: selectedPartner.name,
+          voiceGender: selectedPartner.voiceGender,
+          voiceStyle: selectedPartner.voiceStyle,
+          personality: selectedPartner.personality,
+        },
+        userProfile: {
+          name: userProfile.name,
+          currentLevel: userProfile.currentLevel,
+          learningLanguage: userProfile.learningLanguage,
+        },
+      });
+
+      conversationHistoryRef.current.push({
+        id: `msg-${Date.now()}-ai`,
+        sender: 'ai',
+        text: response.aiReply,
+        timestamp: new Date().toISOString(),
       });
 
       setUserLiveSubtitle('');
       partnerSpeak(response.aiReply);
-    } catch (err) {
+    } catch {
       setEmotion('idle');
       startListeningToUser();
     }
@@ -188,12 +208,10 @@ export const AiSpeakingSession: React.FC = () => {
     if (isMuted) {
       setIsMuted(false);
       startListeningToUser();
-      showToast('Microphone unmuted', 'info');
     } else {
       setIsMuted(true);
       speechService.stopListening();
       setEmotion('idle');
-      showToast('Microphone muted', 'info');
     }
   };
 
@@ -207,46 +225,46 @@ export const AiSpeakingSession: React.FC = () => {
     setEmotion('idle');
     setPartnerSubtitle('');
     setUserLiveSubtitle('');
+    conversationHistoryRef.current = [];
   };
 
   // FULLSCREEN IMMERSIVE CALL VIEW
   if (isFullScreenCall) {
     return (
-      <div className="fixed inset-0 z-50 flex flex-col justify-between bg-zinc-950 p-6 sm:p-10 text-white min-h-screen select-none">
-        {/* Top bar: Only Partner Name */}
-        <div className="flex items-center justify-between max-w-4xl mx-auto w-full">
-          <div className="flex items-center gap-2">
-            <span className="text-xl font-bold tracking-tight">{selectedPartner.name}</span>
+      <div className="fixed inset-0 z-50 flex flex-col justify-between bg-zinc-950 p-4 sm:p-10 text-white min-h-screen select-none overflow-hidden">
+        {/* Top bar: Only Partner Name & Live Ping */}
+        <div className="flex items-center justify-between max-w-3xl mx-auto w-full">
+          <div className="flex items-center gap-2.5">
+            <div className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-ping" />
+            <span className="text-lg sm:text-xl font-extrabold tracking-tight text-white">{selectedPartner.name}</span>
           </div>
         </div>
 
-        {/* Center: Large Real Partner Photo & Subtitles */}
-        <div className="flex flex-1 flex-col items-center justify-center my-auto space-y-8 max-w-3xl mx-auto w-full">
-          {/* Big Expressive Partner Avatar Visual with Emotional Glow */}
+        {/* Center: Large Clean Partner Avatar Visual & Subtitles */}
+        <div className="flex flex-1 flex-col items-center justify-center my-auto space-y-6 max-w-2xl mx-auto w-full">
           <div className="relative">
-            {/* Dynamic Glow Aura */}
             <div
               className={`absolute inset-0 rounded-full blur-3xl transition-all duration-700 ${
                 emotion === 'speaking'
-                  ? 'bg-indigo-500/40 scale-125'
+                  ? 'bg-indigo-500/35 scale-125'
                   : emotion === 'listening'
-                  ? 'bg-emerald-500/35 scale-110'
+                  ? 'bg-emerald-500/30 scale-110'
                   : emotion === 'thinking'
                   ? 'bg-amber-500/30 scale-105'
-                  : 'bg-indigo-600/20 scale-95'
+                  : 'bg-indigo-600/15 scale-95'
               }`}
             />
 
-            {/* High Definition Large Photo Frame */}
+            {/* Circular Portrait */}
             <div
-              className={`relative h-64 w-64 sm:h-80 sm:w-80 overflow-hidden rounded-full border-4 shadow-2xl transition-all duration-500 ${
+              className={`relative h-56 w-56 sm:h-72 sm:w-72 overflow-hidden rounded-full border-4 shadow-2xl transition-all duration-500 ${
                 emotion === 'speaking'
                   ? 'border-indigo-500 ring-8 ring-indigo-500/40 scale-105'
                   : emotion === 'listening'
                   ? 'border-emerald-500 ring-8 ring-emerald-500/30'
                   : emotion === 'thinking'
                   ? 'border-amber-500 ring-6 ring-amber-500/30 animate-pulse'
-                  : 'border-zinc-700 ring-4 ring-zinc-800'
+                  : 'border-zinc-800 ring-4 ring-zinc-900'
               }`}
             >
               <img
@@ -255,92 +273,47 @@ export const AiSpeakingSession: React.FC = () => {
                 className="h-full w-full object-cover object-top"
               />
             </div>
-
-            {/* Status Pill Badge */}
-            <div
-              className={`absolute -bottom-2 right-6 flex items-center gap-1.5 rounded-full px-3.5 py-1 text-xs font-bold text-white shadow-2xl backdrop-blur-md transition-all ${
-                emotion === 'speaking'
-                  ? 'bg-indigo-600'
-                  : emotion === 'listening'
-                  ? 'bg-emerald-600'
-                  : emotion === 'thinking'
-                  ? 'bg-amber-600'
-                  : 'bg-zinc-800'
-              }`}
-            >
-              {emotion === 'speaking' && <Volume2 className="h-3.5 w-3.5 animate-bounce" />}
-              {emotion === 'listening' && <Mic className="h-3.5 w-3.5 animate-pulse" />}
-              {emotion === 'thinking' && <Sparkles className="h-3.5 w-3.5 animate-spin" />}
-              {emotion === 'idle' && <Smile className="h-3.5 w-3.5" />}
-              <span className="capitalize">{emotion}</span>
-            </div>
           </div>
 
-          {/* Natural Soundwave Line */}
-          <div className="flex items-center justify-center gap-1.5 h-8">
-            {[35, 70, 95, 50, 85, 100, 75, 90, 40, 65, 80, 55, 30].map(
-              (val, idx) => (
-                <div
-                  key={idx}
-                  className={`w-1.5 rounded-full transition-all duration-150 ${
-                    emotion === 'speaking'
-                      ? 'bg-indigo-400'
-                      : emotion === 'listening'
-                      ? 'bg-emerald-400'
-                      : 'bg-zinc-800'
-                  }`}
-                  style={{
-                    height:
-                      emotion === 'speaking' || emotion === 'listening'
-                        ? `${(val * Math.random()) + 25}%`
-                        : '20%',
-                  }}
-                />
-              )
-            )}
-          </div>
-
-          {/* CLEAR READABLE SUBTITLES BAR */}
-          <div className="w-full text-center space-y-2 px-4">
+          {/* Subtitles Box */}
+          <div className="w-full text-center space-y-2.5 px-3">
             {partnerSubtitle && (
-              <div className="rounded-3xl border border-zinc-800/80 bg-zinc-900/80 p-5 backdrop-blur-md shadow-xl transition-all">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-400 block mb-1">
+              <div className="rounded-2xl sm:rounded-3xl border border-zinc-800/80 bg-zinc-900/90 p-4 sm:p-5 backdrop-blur-md shadow-2xl transition-all">
+                <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-indigo-400 block mb-1">
                   {selectedPartner.name}:
                 </span>
-                <p className="text-lg sm:text-xl font-semibold text-white leading-relaxed">
+                <p className="text-base sm:text-xl font-semibold text-white leading-relaxed">
                   "{partnerSubtitle}"
                 </p>
               </div>
             )}
 
             {userLiveSubtitle && (
-              <div className="rounded-2xl border border-emerald-900/40 bg-emerald-950/40 px-4 py-2.5 text-xs sm:text-sm text-emerald-300 backdrop-blur-md">
-                <span className="font-bold">You: </span>"{userLiveSubtitle}"
+              <div className="rounded-xl sm:rounded-2xl border border-emerald-900/40 bg-emerald-950/50 px-3.5 py-2 text-xs sm:text-sm text-emerald-300 backdrop-blur-md">
+                <span className="font-bold">{t.speakingYou} </span>"{userLiveSubtitle}"
               </div>
             )}
           </div>
         </div>
 
-        {/* Bottom Control Bar: Big Microphone Button + Smaller Red End Button */}
-        <div className="flex items-center justify-center gap-6 pb-2">
-          {/* Main Microphone Button */}
+        {/* Bottom Controls */}
+        <div className="flex items-center justify-center gap-5 pb-2 sm:pb-4">
           <button
             onClick={toggleMute}
-            className={`flex h-16 w-16 items-center justify-center rounded-3xl font-bold shadow-2xl transition-all transform active:scale-95 cursor-pointer ${
+            className={`flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full font-bold shadow-2xl transition-all transform active:scale-95 cursor-pointer ${
               isMuted
                 ? 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
                 : 'bg-gradient-to-tr from-indigo-600 to-sky-500 text-white shadow-indigo-600/40'
             }`}
-            title={isMuted ? 'Unmute microphone' : 'Mute microphone'}
+            title={isMuted ? t.unmuteMic : t.muteMic}
           >
-            {isMuted ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
+            {isMuted ? <MicOff className="h-6 w-6 sm:h-7 sm:w-7" /> : <Mic className="h-6 w-6 sm:h-7 sm:w-7" />}
           </button>
 
-          {/* Smaller Red End Call Button */}
           <button
             onClick={endCall}
-            className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-600 text-white shadow-lg shadow-rose-600/30 hover:bg-rose-700 transition-all active:scale-95 cursor-pointer"
-            title="End conversation"
+            className="flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-full bg-rose-600 text-white shadow-lg shadow-rose-600/30 hover:bg-rose-700 transition-all active:scale-95 cursor-pointer"
+            title={t.endCall}
           >
             <PhoneOff className="h-5 w-5" />
           </button>
@@ -350,58 +323,55 @@ export const AiSpeakingSession: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8 animate-fadeIn pb-12 max-w-4xl mx-auto">
-      {/* Selection screen with 1 Female and 1 Male Partner */}
-      <div className="space-y-8">
-        <div className="text-center space-y-2">
-          <h1 className="text-3xl font-extrabold tracking-tight text-zinc-900 dark:text-white sm:text-4xl">
-            Speaking Partner
-          </h1>
-          <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400 max-w-lg mx-auto">
-            Choose a partner for your selected language and practice unlimited speaking without limits.
-          </p>
-        </div>
+    <div className="space-y-6 animate-fadeIn pb-4 max-w-4xl mx-auto">
+      {/* Title */}
+      <div className="text-center space-y-1.5">
+        <h1 className="text-2xl font-black tracking-tight text-zinc-900 dark:text-white sm:text-4xl">
+          {t.speakingHeading}
+        </h1>
+        <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">
+          {t.speakingSubheading}
+        </p>
+      </div>
 
-        {/* 2 Static Partner Cards: No hover movement/animation */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 max-w-3xl mx-auto">
-          {PARTNER_AVATARS.map((partner) => (
-            <div
-              key={partner.id}
-              onClick={() => startVoiceCall(partner)}
-              className="cursor-pointer overflow-hidden rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 flex flex-col justify-between"
-            >
-              <div>
-                {/* Large High Definition Photo */}
-                <div className="relative aspect-4/5 w-full overflow-hidden rounded-2xl bg-zinc-100 dark:bg-zinc-800">
-                  <img
-                    src={partner.avatarUrl}
-                    alt={partner.name}
-                    className="h-full w-full object-cover object-top"
-                  />
-                </div>
-
-                {/* Partner Info */}
-                <div className="mt-4 text-left">
-                  <h3 className="text-xl font-extrabold text-zinc-900 dark:text-white">
-                    {partner.name}
-                  </h3>
-                </div>
+      {/* Speaker Cards: Photo, Name, and Speak button ONLY */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 max-w-2xl mx-auto">
+        {PARTNER_AVATARS.map((partner) => (
+          <div
+            key={partner.id}
+            onClick={() => startVoiceCall(partner)}
+            className="cursor-pointer overflow-hidden rounded-3xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 flex flex-col justify-between hover:shadow-md transition-all active:scale-[0.99]"
+          >
+            <div>
+              <div className="relative aspect-4/5 w-full overflow-hidden rounded-2xl bg-zinc-100 dark:bg-zinc-800">
+                <img
+                  src={partner.avatarUrl}
+                  alt={partner.name}
+                  className="h-full w-full object-cover object-top"
+                />
               </div>
 
-              {/* Big Start Call Action */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  startVoiceCall(partner);
-                }}
-                className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-indigo-600 py-3.5 text-sm font-bold text-white shadow-md hover:bg-indigo-700 transition-colors active:scale-98 cursor-pointer"
-              >
-                <Mic className="h-4 w-4" />
-                <span>Speak with {partner.name}</span>
-              </button>
+              {/* Name Only */}
+              <div className="mt-3 text-left">
+                <h3 className="text-lg sm:text-xl font-black text-zinc-900 dark:text-white">
+                  {partner.name}
+                </h3>
+              </div>
             </div>
-          ))}
-        </div>
+
+            {/* Speak Button */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                startVoiceCall(partner);
+              }}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-indigo-600 py-3 text-sm font-bold text-white shadow-md hover:bg-indigo-700 transition-colors active:scale-98 cursor-pointer"
+            >
+              <Mic className="h-4 w-4" />
+              <span>{t.speakWith(partner.name)}</span>
+            </button>
+          </div>
+        ))}
       </div>
     </div>
   );

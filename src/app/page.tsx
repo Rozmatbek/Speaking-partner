@@ -2,31 +2,17 @@
 
 import React from 'react';
 import { useApp } from '@/context/AppContext';
-import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { Navbar } from '@/components/layout/Navbar';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { MobileNav } from '@/components/layout/MobileNav';
-import { DashboardOverview } from '@/components/dashboard/DashboardOverview';
 import { AiSpeakingSession } from '@/components/speaking/AiSpeakingSession';
-import { HumanPartnersView } from '@/components/partners/HumanPartnersView';
 import { ShadowingView } from '@/components/shadowing/ShadowingView';
 import { MockExamsView } from '@/components/mock-exams/MockExamsView';
-import { VocabularyView } from '@/components/vocabulary/VocabularyView';
-import { RoadmapView } from '@/components/roadmap/RoadmapView';
-import { ProgressAnalyticsView } from '@/components/progress/ProgressAnalyticsView';
-import { AdminPanel } from '@/components/admin/AdminPanel';
-import { SettingsView } from '@/components/profile/SettingsView';
 import { ProfileModal } from '@/components/profile/ProfileModal';
-import { PricingModal } from '@/components/premium/PricingModal';
 import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
 
 export default function Home() {
-  const { userProfile, activeTab, toast } = useApp();
-
-  // If first time or not completed onboarding, present the Onboarding Wizard
-  if (!userProfile.onboardingCompleted) {
-    return <OnboardingWizard />;
-  }
+  const { activeTab, toast } = useApp();
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900 transition-colors duration-200 dark:bg-zinc-950 dark:text-zinc-50 font-sans">
@@ -38,19 +24,11 @@ export default function Home() {
         <Sidebar />
 
         {/* Main Content Area */}
-        <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-8 sm:py-8 md:pb-8 pb-24 md:pl-60">
-          <div className="mx-auto max-w-6xl">
-            {activeTab === 'dashboard' && <DashboardOverview />}
+        <main className="flex-1 overflow-y-auto px-3 sm:px-6 md:px-8 py-3 sm:py-6 pb-20 md:pb-6 md:pl-64">
+          <div className="mx-auto max-w-5xl">
             {activeTab === 'speaking' && <AiSpeakingSession />}
-            {activeTab === 'partners' && <HumanPartnersView />}
             {activeTab === 'shadowing' && <ShadowingView />}
             {activeTab === 'mock-exams' && <MockExamsView />}
-            {activeTab === 'vocabulary' && <VocabularyView />}
-            {activeTab === 'roadmap' && <RoadmapView />}
-            {activeTab === 'progress' && <ProgressAnalyticsView />}
-            {activeTab === 'admin' && <AdminPanel />}
-            {activeTab === 'settings' && <SettingsView />}
-            {activeTab === 'premium' && <PricingModal />}
           </div>
         </main>
       </div>
